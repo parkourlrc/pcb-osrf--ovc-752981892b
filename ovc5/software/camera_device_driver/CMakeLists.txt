@@ -1,13 +1,16 @@
-cmake_minimum_required(VERSION 2.8.3)
+cmake_minimum_required(VERSION 3.10)
 project(ovc5_driver)
 
-#set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
+option(PROPRIETARY_SENSORS "Whether to include proprietary sensors." OFF)
+
+find_package(Threads REQUIRED)
 
 include_directories(
- include
+  include
 )
 
 add_library(ovc5_library
+  src/gpio_driver.cpp
   src/i2c_driver.cpp
   src/uio_driver.cpp
   src/ethernet_driver.cpp
@@ -16,8 +19,17 @@ add_library(ovc5_library
   src/timer_driver.cpp
 )
 
+target_compile_features(ovc5_library PUBLIC cxx_std_17)
+target_compile_options(ovc5_library PUBLIC -Wall -O3)
+if(PROPRIETARY_SENSORS)
+  message("Proprietary Sensors Enabled")
+  target_compile_definitions(ovc5_library PUBLIC -DPROPRIETARY_SENSORS)
+endif()
+
 target_link_libraries(ovc5_library
   i2c
+  jsoncpp
+  Threads::Threads
 )
 
 # Add all the cameras
@@ -38,5 +50,3 @@ target_link_libraries(ovc5_driver
   ovc5_library
   ovc5_cameras
 )
-
-target_compile_features(ovc5_library PRIVATE cxx_std_17)

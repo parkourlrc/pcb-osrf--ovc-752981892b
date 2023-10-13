@@ -20,7 +20,7 @@ Each camera family has its own directory in this repository that contains its re
 # Hardware Design
 
 We are using the very latest KiCAD: the nightly development builds.
-Installation instructions are here: http://kicad-pcb.org/download/ubuntu/
+Installation instructions are here: https://www.kicad.org/download/ubuntu/
 
 Once you have installed `kicad-nightly` on your machine, then you will
 need to set up the repos as follows:
@@ -43,3 +43,14 @@ Then you should be able to view the latest developments:
 cd ~/hw/ovc/ovc5/hardware/carrier
 kicad-nightly ovc5.kicad_pro
 ```
+
+---
+
+#### Software License
+[Apache Version 2.0](https://github.com/osrf/ovc/blob/master/LICENSE)
+
+#### Hardware License
+[CERN-OHL-P](https://github.com/osrf/ovc/blob/master/LICENSE_HARDWARE)
+
+#### Documentation License
+<a rel="license" href="http://creativecommons.org/licenses/by/4.0/"><img alt="Creative Commons License" style="border-width:0" src="https://i.creativecommons.org/l/by/4.0/88x31.png" /></a><br />This work is licensed under a <a rel="license" href="http://creativecommons.org/licenses/by/4.0/">Creative Commons Attribution 4.0 International License</a>.

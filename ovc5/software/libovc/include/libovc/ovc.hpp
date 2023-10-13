@@ -1,0 +1,31 @@
+#ifndef __OVC_HPP
+#define __OVC_HPP
+
+#include <jsoncpp/json/json.h>
+
+#include <thread>
+#include <unordered_map>
+
+#include "libovc/ethernet_packetdef.hpp"
+#include "libovc/server.hpp"
+
+namespace libovc
+{
+class OVC
+{
+private:
+  std::unordered_map<uint8_t, OVCImage> frames_;
+  Server server_;
+  Json::Value config_;
+
+public:
+  std::unordered_map<uint8_t, OVCImage> getFrames();
+
+  void setExposure(int cam_id, float exposure);
+  void setFrameRate(float frame_rate);
+  void updateConfig();
+};
+
+}  // namespace libovc
+
+#endif  // OVC_HPP

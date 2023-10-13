@@ -20,11 +20,16 @@ XSA_PATH=$VIVADO_PROJECT/design_1_wrapper.xsa
 PETALINUX_DIR=$FIRMWARE_DIR/petalinux
 BOOT_FILES_DIR=$PETALINUX_DIR/images/linux
 
+# EMMC boot files will be copied into the SD's boot partition under 'emmc'.
+# The eMMC loading script will grab these when run on the board.
+SD_BOOT_FILES_DIR=$DIR/tmp/sd
+EMMC_BOOT_FILES_DIR=$DIR/tmp/sd/emmc
+
 TMP_MOUNT_DIR=/tmp/petalinux_mnt
 
 help () {
   cat << EOF
-This script is meant to set up and SD card to load Debian Buster and the latest
+This script is meant to set up and SD card to load Debian Bullseye and the latest
 OVC 5 software/firmware into the eMMC on the OVC 5 hardware.
 
 THIS WILL INSTALL DEPENDENCIES FROM APT AS IT GOES. MAKE SURE TO REVIEW SCRIPT.
@@ -45,11 +50,22 @@ NOTE: Before running this you will need to generate the bitstream in vivado and
 
 usage: ./install_sd.sh <device>
 
-  device: /dev/ device to install to. This is likely \"sdX\" where X is a
+  device: /dev/ device to install to. This is likely "sdX" where X is a
     letter. Check with gparted or dmesg to make sure the wrong device is not
     selected (this will re-format the drive so it's preferable to get the right
     device!). Make sure to unmount the drive before running.
 EOF
+}
+
+_petalinux_build_ () {
+  petalinux-config --get-hw-description --silentconfig
+  petalinux-build
+  petalinux-package \
+    --boot \
+    --force \
+    --fsbl $BOOT_FILES_DIR/zynqmp_fsbl.elf \
+    --fpga \
+    --u-boot
 }
 
 build_boot_image () {
@@ -74,17 +90,26 @@ EOF
   fi
 
   save_dir=$pwd
-
   cp $XSA_PATH $PETALINUX_DIR/system.xsa
   cd $PETALINUX_DIR
-  petalinux-config --get-hw-description --silentconfig
-  petalinux-build
-  petalinux-package \
-    --boot \
-    --force \
-    --fsbl $BOOT_FILES_DIR/zynqmp_fsbl.elf \
-    --fpga \
-    --u-boot
+
+  # Creating directory for petalinux boot files
+  mkdir -p $SD_BOOT_FILES_DIR
+  mkdir -p $EMMC_BOOT_FILES_DIR
+
+  echo "Building eMMC boot image"
+  sed -i 's/mmcblk1p2/mmcblk0p2/g' $PETALINUX_DIR/project-spec/configs/config
+  _petalinux_build_
+  cp $BOOT_FILES_DIR/BOOT.BIN $EMMC_BOOT_FILES_DIR/boot.bin
+  cp $BOOT_FILES_DIR/image.ub $EMMC_BOOT_FILES_DIR
+  cp $BOOT_FILES_DIR/boot.scr $EMMC_BOOT_FILES_DIR
+
+  echo "Building sd-card boot image"
+  sed -i 's/mmcblk0p2/mmcblk1p2/g' $PETALINUX_DIR/project-spec/configs/config
+  _petalinux_build_
+  cp $BOOT_FILES_DIR/BOOT.BIN $SD_BOOT_FILES_DIR/boot.bin
+  cp $BOOT_FILES_DIR/image.ub $SD_BOOT_FILES_DIR
+  cp $BOOT_FILES_DIR/boot.scr $SD_BOOT_FILES_DIR
 
   cd $save_dir
 }
@@ -157,19 +182,17 @@ mount_drive () {
 }
 
 copy_bin () {
-  sudo cp $BOOT_FILES_DIR/BOOT.BIN $BOOT_DIR/boot.bin
-  sudo cp $BOOT_FILES_DIR/image.ub $BOOT_DIR
-  sudo cp $BOOT_FILES_DIR/boot.scr $BOOT_DIR
+  sudo cp -r $SD_BOOT_FILES_DIR/* $BOOT_DIR/
 }
 
 install_debian () {
   sudo apt install qemu-user-static debootstrap debian-archive-keyring schroot
   sudo apt-key add /usr/share/keyrings/debian-archive-keyring.gpg
-  # Sets up debian buster arm port on the sd card
+  # Sets up debian bullseye arm port on the sd card
   sudo qemu-debootstrap \
     --arch=arm64 \
     --keyring /usr/share/keyrings/debian-archive-keyring.gpg \
-    --variant=buildd buster \
+    --variant=buildd bullseye \
     $ROOT_DIR http://ftp.debian.org/debian
 }
 
@@ -183,7 +206,7 @@ copy_petalinux_fs () {
 
 setup_userland () {
   echo "[arm64-debian]
-description=Debian Buster (arm64)
+description=Debian Bullseye (arm64)
 directory=$ROOT_DIR
 root-users=root
 users=root
@@ -196,17 +219,44 @@ type=directory" | sudo tee /etc/schroot/chroot.d/arm64-debian
   done
 
 interfaces_text="
-auto lo eth0
+auto lo
 allow-hotplug eth0
 iface lo inet loopback
-iface eth0 inet dhcp"
+iface eth0 inet dhcp
 
-subnet_text="subnet 10.0.1.0 netmask 255.255.255.0 {
+allow-hotplug usb0
+iface usb0 inet static
+    address 10.0.1.1
+    netmask 255.255.255.252
+    gateway 10.0.1.0
+    
+allow-hotplug usb1
+iface usb0 inet static
+    address 10.0.2.1
+    netmask 255.255.255.252
+    gateway 10.0.2.0"
+
+subnet_text="
+subnet 10.0.1.0 netmask 255.255.255.252 {
   interface usb0;
-  range 10.0.1.2 10.0.1.2;
+  range 10.0.1.1 10.0.1.2;
+  option subnet-mask 255.255.255.252;
   option routers 10.0.1.1;
-  option interface-mtu 13500;
+  option broadcast-address 10.0.1.3;
+  option interface-mtu 15300;
+}
+
+subnet 10.0.2.0 netmask 255.255.255.252 {
+  interface usb1;
+  range 10.0.2.1 10.0.2.2;
+  option subnet-mask 255.255.255.252;
+  option routers 10.0.2.1;
+  option broadcast-address 10.0.2.3;
+  option interface-mtu 15300;
 }"
+
+  # Copy in all scripts that the device will use.
+  sudo cp -r $DIR/device_scripts/* $ROOT_DIR/root/
 
   echo "
 sed -e \"s/$(hostname)/zynq/\" -i /etc/hosts
@@ -215,15 +265,21 @@ passwd
 $TEMP_PASSWORD
 $TEMP_PASSWORD
 apt update
-apt install -y vim locales openssh-server ifupdown net-tools iputils-ping avahi-autoipd avahi-daemon haveged i2c-tools rsyslog
-apt install -y git cmake libi2c-dev isc-dhcp-server libyaml-cpp-dev
+apt install -y vim locales openssh-server ifupdown net-tools iputils-ping avahi-autoipd avahi-daemon haveged i2c-tools rsyslog iperf3
+apt install -y git cmake libi2c-dev isc-dhcp-server libyaml-cpp-dev dosfstools libjsoncpp-dev
 grep -qxF 'ttyPS0' /etc/securetty || echo 'ttyPS0' >> /etc/securetty
+cd /root/ethernet_utils/init_files
+bash distribute_files
+cd -
 grep -qxF '$interfaces_text' /etc/network/interfaces || echo '$interfaces_text' >> /etc/network/interfaces
-grep -qxF '$subnet_text' /etc/dhcp/dhcpd.conf || echo '$subnet_text' >> /etc/dhcp/dhcpd.conf
+echo '$subnet_text' >> /etc/dhcp/dhcpd.conf
 egrep -v '^\s*#' /etc/ssh/sshd_config | grep -qxF 'PermitRootLogin yes' || echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config
 egrep -v '^\s*#' /etc/ssh/sshd_config | grep -qxF 'PasswordAuthentication yes' || echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config
-sed -i 's/INTERFACESv4=\"\"/INTERFACESv4=\"usb0\"/g' /etc/default/isc-dhcp-server
+sed -i 's/INTERFACESv4=\"\"/INTERFACESv4=\"usb0 usb1\"/g' /etc/default/isc-dhcp-server
 sed -i 's/#OPTIONS=\"\"/OPTIONS=\"-4 -s\"/g' /etc/default/isc-dhcp-server
+echo \"TERM=xterm-256color\" >> /root/.bashrc
+echo -e '#!/bin/sh -e \n/root/startup.sh & \nexit 0' >> /etc/rc.local
+chmod +x /etc/rc.local
 " | sudo schroot -c arm64-debian -u root
 
   echo "
@@ -238,9 +294,6 @@ Execute and run through (likely using \"158. en_US.UTF-8 UTF-8\"):
 "
 
   sudo schroot -c arm64-debian -u root
-
-  # Copy in all scripts that the device will use.
-  sudo cp $DIR/device_scripts/* $ROOT_DIR/root/
 }
 
 if [ -z $1 ] || [ $1 == "-h" ]; then
@@ -278,7 +331,7 @@ Copy in the boot files.
 copy_bin
 
 echo "
-Install debian buster arm64 to root.
+Install debian bullseye arm64 to root.
 "
 install_debian
 
